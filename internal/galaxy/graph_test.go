@@ -942,6 +942,73 @@ func TestNeighboursUnknownUUID(t *testing.T) {
 	}
 }
 
+func TestNeighboursLimitAppliesAfterSort(t *testing.T) {
+	// A small Limit must keep the highest-ranked neighbours, not the first
+	// ones the walk reached. m-1 declares its edge to the unattributed
+	// technique outbound, while the actor reaches m-1 inbound, so the walk
+	// visits the technique before the actor. A limit applied during traversal
+	// would surface the technique and drop the actor — even though the actor
+	// outranks every technique by the sort rule (actors first). Ranking has to
+	// run before truncation.
+	//
+	// This is the same shape as TestActorNeighboursAreNotDemoted, but with a
+	// tight Limit that is what exposes the truncate-before-sort bug: the
+	// unlimited case sorts correctly and hides it.
+	root := t.TempDir()
+	clusters := filepath.Join(root, "clusters")
+	if err := os.MkdirAll(clusters, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeCluster(t, clusters, "mitre-malware", []map[string]any{
+		{"value": "Family", "uuid": "m-1", "related": []map[string]any{
+			{"dest-uuid": "t-orphan", "type": "uses"},
+		}},
+	})
+	writeCluster(t, clusters, "threat-actor", []map[string]any{
+		{"value": "The Actor", "uuid": "a-1", "related": []map[string]any{
+			{"dest-uuid": "m-1", "type": "uses"},
+		}},
+	})
+	writeCluster(t, clusters, "mitre-attack-pattern", []map[string]any{
+		{"value": "Orphan", "uuid": "t-orphan"},
+	})
+	g, err := Load(root, "deadbeef")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Sanity: the actor carries group_count 0 but must still rank above the
+	// unattributed technique (rank 0 vs 2), so it is first when unlimited.
+	full := g.Neighbours("m-1", NeighbourOpts{Depth: 1})
+	if len(full) != 2 {
+		t.Fatalf("expected two neighbours, got %+v", full)
+	}
+	if full[0].UUID != "a-1" {
+		t.Fatalf("the actor should rank first when unlimited, got %+v", full)
+	}
+
+	// The regression: with Limit 1 the actor — discovered second by the walk —
+	// must still be the one returned, not the technique discovered first.
+	one := g.Neighbours("m-1", NeighbourOpts{Depth: 1, Limit: 1})
+	if len(one) != 1 {
+		t.Fatalf("expected one neighbour, got %+v", one)
+	}
+	if one[0].UUID != "a-1" {
+		t.Errorf("Limit 1 must keep the highest-ranked neighbour (the actor), got %s",
+			one[0].UUID)
+	}
+
+	// Limit at or above the count keeps everything, in ranked order.
+	two := g.Neighbours("m-1", NeighbourOpts{Depth: 1, Limit: 2})
+	if len(two) != 2 {
+		t.Fatalf("expected two neighbours, got %+v", two)
+	}
+	if two[0].UUID != "a-1" || two[1].UUID != "t-orphan" {
+		t.Errorf("Limit 2 must keep both in ranked order, got %v",
+			[]string{two[0].UUID, two[1].UUID})
+	}
+}
+
 // ---- paths ------------------------------------------------------------------
 
 func TestShortestPath(t *testing.T) {

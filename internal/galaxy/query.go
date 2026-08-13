@@ -120,7 +120,12 @@ func (g *Graph) Neighbours(uuid string, opt NeighbourOpts) []Neighbour {
 	queue := []entry{{node: start, depth: 0, path: []string{start.UUID}}}
 	var out []Neighbour
 
-	for len(queue) > 0 && len(out) < opt.Limit {
+	// Collect every candidate the depth bound reaches before ranking. Limit is
+	// "the top N once sorted", not "stop the walk after N": cutting the walk at
+	// Limit took neighbours in breadth-first order, so a small limit could
+	// return a low-ranked entry while the one the sort would have placed first
+	// was never even collected. Truncation happens after the sort below.
+	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
 		if cur.depth == opt.Depth {
@@ -169,9 +174,6 @@ func (g *Graph) Neighbours(uuid string, opt NeighbourOpts) []Neighbour {
 				n.Path = path
 			}
 			out = append(out, n)
-			if len(out) >= opt.Limit {
-				break
-			}
 		}
 	}
 
@@ -192,6 +194,12 @@ func (g *Graph) Neighbours(uuid string, opt NeighbourOpts) []Neighbour {
 		}
 		return out[i].Value < out[j].Value
 	})
+
+	// Truncate after sorting so the limit keeps the highest-ranked neighbours
+	// rather than the first ones the walk happened to reach.
+	if len(out) > opt.Limit {
+		out = out[:opt.Limit]
+	}
 	return out
 }
 
